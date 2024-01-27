@@ -81,7 +81,7 @@ def get_offline_partitions(line):
         leader_node = line.split()[5]
 
         # Format the results
-        result = f"    TopicName: \"{topic_name}\", Partition: \"{partition}\", Leader Node: \"{leader_node}\", Brokers Out of Sync: \"{offline_replicas}\""
+        result = f"    Topic: \"{topic_name}\", Partition: \"{partition}\", Leader Node: \"{leader_node}\", Brokers Out of Sync: \"{offline_replicas}\""
 
     return result if offline_replicas else None
 
