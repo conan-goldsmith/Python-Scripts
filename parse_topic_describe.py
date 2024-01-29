@@ -1,188 +1,163 @@
 import subprocess
 import argparse
 import os
+import re
 
 def run_command(command):
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
-    output, error = process.communicate()
-    if error:
-        print(f"Error occurred: {error}")
-    return output.decode()
+    """
+    Execute a shell command and return its output.
 
-def get_broker_id_from_line(line):
-    keyword = "Broker id: "
-    start = line.find(keyword)
-    if start != -1:
-        start += len(keyword)
-        end = line.find(" ", start)  # assuming the broker id ends with a space
-        if end == -1:  # if there's no space, take until the end of the line
-            end = len(line)
-        broker_id = line[start:end]
-        return int(broker_id)  # convert the broker id to an integer
-    else:
-        return None  # return None if the keyword isn't found in the line
+    Args:
+        command (str): The command to execute.
 
-def get_leader_id_from_line(line):
-    keyword = "Leader: "
-    start = line.find(keyword)
-    if start != -1:
-        start += len(keyword)
-        end = start
-        while end < len(line) and not line[end].isspace():  # find the next whitespace character
-            end += 1
-        leader_id = line[start:end].strip()  # strip any trailing spaces
+    Returns:
+        str: The output of the command, or an error message if an error occurs.
+    """
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+        output, error = process.communicate()
+        if error:
+            return f"Error occurred: {error.decode()}"
+        return output.decode()
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
 
-        return leader_id  # convert the leader id to an integer
-    else:
-        return None  # return None if the keyword isn't found in the line
+def extract_integer_value(line, keyword):
+    """
+    Extract an integer value from a line based on the specified keyword.
 
-def get_preferred_leader(line):
-    keyword = "Isr: "
-    start = line.find(keyword)
-    if start != -1:
-        start += len(keyword)
-        end = line.find(",", start)
-        if end == -1:  # if there's no comma, take until the end of the line
-            end = len(line)
-        preferred_replica = line[start:end].strip()  # strip any trailing spaces
+    Args:
+        line (str): The line from which to extract the value.
+        keyword (str): The keyword to identify the start of the value.
 
-        return preferred_replica  # convert the leader id to an integer
-    else:
-        return None  # return None if the keyword isn't found in the line
-
-def get_preferred_replica_id_from_line(line):
-    keyword = "Isr: "
-    start = line.find(keyword)
-    if start != -1:
-        start += len(keyword)
-        end = line.find(",", start)  # assuming the preferred replica id ends with a comma
-        if end == -1:  # if there's no comma, take until the end of the line
-            end = len(line)
-        preferred_replica_id = line[start:end]
-        return int(preferred_replica_id)  # convert the preferred replica id to an integer
-    else:
-        return None  # return None if the keyword isn't found in the line
+    Returns:
+        int or None: The extracted integer value, or None if not found.
+    """
+    match = re.search(rf"{keyword}(\d+)", line)
+    if match:
+        return int(match.group(1))
+    return None
 
 def get_offline_partitions(line):
+    """
+    Extract offline partition information from a line.
+
+    Args:
+        line (str): The line containing offline partition information.
+
+    Returns:
+        str or None: Formatted offline partition information, or None if not applicable.
+    """
     keyword = "Offline: "
-    start = line.find(keyword)
-    result = None
-    offline_replicas = None
-    if start != -1:
-        start += len(keyword)
-        end = line.find(",", start)  # assuming the offline replica id ends with a comma
-        if end == -1:  # if there's no comma, take until the end of theline
-            end = len(line)
-        offline_replicas = line[start:end].strip()  # strip to remove any leading/trailing whitespace
+    if keyword in line:
+        parts = line.split()
+        topic_name, partition, leader_node = parts[1], parts[3], parts[5]
+        offline_replicas = line.split(keyword)[-1].split(",")[0].strip()
+        if offline_replicas:
+            return f"\tTopic: \"{topic_name}\", Partition: \"{partition}\", Leader Node: \"{leader_node}\", Brokers Out of Sync: \"{offline_replicas}\""
+        return None
+    return None
 
-        # Extract TopicName, Partition, Leader Node, and Brokers Out of Sync from the line
-        topic_name = line.split()[1]
-        partition = line.split()[3]
-        leader_node = line.split()[5]
+def get_out_of_sync(line):
+    """
+    Extract out-of-sync replicas from a line.
 
-        # Format the results
-        result = f"    Topic: \"{topic_name}\", Partition: \"{partition}\", Leader Node: \"{leader_node}\", Brokers Out of Sync: \"{offline_replicas}\""
+    Args:
+        line (str): The line containing replica information.
 
-    return result if offline_replicas else None
+    Returns:
+        set or None: Set of out-of-sync replicas, or None if not found.
+    """
+    replicas_match = re.search(r"Replicas:(\S+)", line)
+    isr_match = re.search(r"Isr:(\S+)", line)
+    if replicas_match and isr_match:
+        replicas = set(replicas_match.group(1).split(','))
+        isr_list = set(isr_match.group(1).split(','))
+        return replicas - isr_list
+    return None
 
 def parse_output(output):
+    """
+    Parse and analyze the output from Kafka's topic describe command.
+
+    Args:
+        output (str): The output to be parsed and analyzed.
+    """
     offline_partitions = []
-    under_replicated_partitions = []
+    under_replicated_partitions = {}
     leader_counts = {}
-    under_replicated_leader_counts = {}
+    leader_percentage = {}
     non_preferred_leader_counts = {}
     preferred_leader_counts = {}
 
-
     lines = output.split("\n")
     for line in lines:
-        # Parse the line for the information you need
-        # This will depend on the exact format of the kafka-topics command output
-        # You might need to use regular expressions or other string parsing techniques
+        if "Leader: none" in line or "Offline:" in line:
+            offline_info = get_offline_partitions(line)
+            if offline_info:
+                offline_partitions.append(offline_info)
 
-        # If the line indicates an offline partition, add it to the list
-        if "Leader: none" in line:
-            offline_partitions.append(line)
-
-        if "Offline:" in line:
-            offline_nodes = get_offline_partitions ( line )
-            if offline_nodes is not None:
-                leader_id = get_leader_id_from_line(line)
-                under_replicated_leader_counts [ leader_id ] = under_replicated_leader_counts.get(leader_id, 0) + 1
-                # print(offline_nodes)
-                under_replicated_partitions.append (offline_nodes)
-
-        # If the line indicates a broker is a leader for a partition, increment its count
-        if "Leader:" in line:
-            leader_id = get_leader_id_from_line(line)  # 
+        leader_id = extract_integer_value(line, "Leader: ")
+        if leader_id is not None:
             leader_counts[leader_id] = leader_counts.get(leader_id, 0) + 1
 
-        # If the line indicates a partition does not have the preferred replica as the leader, increment the count for the broker
-        if "Isr:" in line and "Leader:" in line:
-            leader_id = get_leader_id_from_line(line)
-            preferred_leader = get_preferred_replica_id_from_line(line)  # You'll need to implement these functions
-            if int(leader_id) != int(preferred_leader):
-                non_preferred_leader_counts[preferred_leader] = non_preferred_leader_counts.get(preferred_leader, 0) + 1
+            preferred_leader = extract_integer_value(line, "Replicas:")
+            if preferred_leader is not None:
+                if leader_id != preferred_leader:
+                    non_preferred_leader_counts[leader_id] = non_preferred_leader_counts.get(leader_id, 0) + 1
+                else:
+                    preferred_leader_counts[leader_id] = preferred_leader_counts.get(leader_id, 0) + 1
+
+            if "Offline:" in line or "Isr:" in line:
+                under_replicated_partitions[leader_id] = under_replicated_partitions.get(leader_id, 0) + 1
+
+    total_partitions = sum(leader_counts.values())
+
+    # Count of under replicated partitions
+    print(f"Count of under replicated Partition(s): {len(offline_partitions)}")
+    print("Under replicated partition(s):")
+    for partition_info in offline_partitions:
+        print(partition_info)
+
+    # Leadership distribution
+    print("Leadership distribution:")
+    for leader_id, count in leader_counts.items():
+        leader_percentage[leader_id] = (count / total_partitions) * 100
+        print(f"    Broker: {leader_id} is a leader for {count} partition(s). That is {leader_percentage[leader_id]:.2f} % of all partitions")
+
+    # Under replicated leader counts
+    print("Under replicated leader counts:")
+    for leader_id, count in under_replicated_partitions.items():
+        print(f"    Broker: {leader_id} is a leader for {count} under replicated partition(s)")
+
+    # Frequency of Preferred leadership
+    print("Frequency of Preferred leadership:")
+    non_preferred_percentage = sum(non_preferred_leader_counts.values()) / total_partitions * 100
+    print(f"    {non_preferred_percentage:.2f} % of all partitions are not led by the preferred replica")
+    for leader_id in leader_counts.keys():
+        preferred_percent = preferred_leader_counts.get(leader_id, 0) / leader_counts[leader_id] * 100
+        non_preferred_percent = non_preferred_leader_counts.get(leader_id, 0) / leader_counts[leader_id] * 100 if leader_counts[leader_id] != 0 else 0
+        print(f"    Broker: {leader_id} is leading {preferred_percent:.2f} % of partitions where it is the preferred replica. {non_preferred_percent:.2f} % of its partitions where it is not the preferred replica.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Parse and analyze Kafka topic information.")
+    parser.add_argument('--file', help='File containing the output to analyze')
+    parser.add_argument('--command', help='Command to execute and analyze its output')
+    args = parser.parse_args()
+
+    try:
+        if args.file:
+            if os.path.isfile(args.file):
+                with open(args.file, 'r') as file:
+                    output = file.read()
+                    parse_output(output)
             else:
-                preferred_leader_counts[preferred_leader] = preferred_leader_counts.get(preferred_leader, 0) + 1
-
-
-    # Count of under replicated partitions
-    count = len ( under_replicated_partitions )
-    if count != 0:
-        print(f"Count of under replicated Partition(s): {count}")
-        # Print each under replicated partition
-        print ( f"Under replicated partition(s):" )
-        for URP in under_replicated_partitions :
-            print ( URP )
-    else:
-        print(f"No Under Replicated Partition(s) Found")
-
-    # Count of under replicated partitions
-    if leader_counts is not None:
-        print ( f"Leadership distribution:" )
-        for leader in leader_counts :
-            print ( "    Broker:", leader, "is a leader for", leader_counts.get(leader,0), "partition(s)" )
-    else:
-        print(f"Could not calculate the count of partition leadership per node")
-
-
-    # Count of under replicated partitions
-    count = len ( under_replicated_leader_counts )
-    if count != 0:
-        print ( f"Under replicated leader counts:" )
-        for leader_count in under_replicated_leader_counts :
-            print ( "    Broker:", leader_count, "is a leader for", under_replicated_leader_counts.get(leader_count,0), "under replicated partition(s)" )
-    else:
-        print(f"No under replicated partition(s) found owned by any specific broker")
-
-
-
-    count = len ( non_preferred_leader_counts )
-    if count != 0:
-        print ( f"Frequency of Non-Preferred leadership:" )
-        for leader_id in non_preferred_leader_counts :
-            print ( "    Broker:", leader_id, "is not the leader while being the preferred leader for", non_preferred_leader_counts.get(leader_id,0), "partition(s)" )
-
-        print ( f"Frequency of Preferred leadership:" )
-        for leader_id in preferred_leader_counts :
-            print ( "    Broker:", leader_id, "is the preferred leader and the actual leader for", preferred_leader_counts.get(leader_id,0), "partition(s)" )
-
-    else:
-        print(f"All partition(s) were found to be led to by the preferred leader")
-
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--file', help='File to read the output from')
-parser.add_argument('--command', help='Command to run if no file is provided')
-args = parser.parse_args()
-
-if args.file and os.path.isfile(args.file):
-    with open(args.file, 'r') as file:
-        output = file.read()
-        parse_output(output)
-elif args.command:
-    output = run_command(args.command)
-    parse_output(output)
-else:
-    print("Please provide either a file to read from or a command to run.")
+                print(f"The file {args.file} does not exist. Please provide a valid file.")
+        elif args.command:
+            output = run_command(args.command)
+            parse_output(output)
+        else:
+            print("Please provide either a file to read from or a command to run.")
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
