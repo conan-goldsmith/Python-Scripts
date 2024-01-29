@@ -52,7 +52,7 @@ def get_offline_partitions(line):
     if keyword in line:
         parts = line.split()
         topic_name, partition, leader_node = parts[1], parts[3], parts[5]
-        offline_replicas = line.split(keyword)[-1].split(",")[0].strip()
+        offline_replicas = line.split(keyword)[-1].split("\n\t")[0].strip()
         if offline_replicas:
             return f"\tTopic: \"{topic_name}\", Partition: \"{partition}\", Leader Node: \"{leader_node}\", Brokers Out of Sync: \"{offline_replicas}\""
         return None
